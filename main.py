@@ -37,6 +37,11 @@ MANIFEST_TEMPLATE = {
     ],
 }
 
+CONFIG_FILENAME = "config.json"
+DEFAULT_CONFIG = {
+    "author": "",
+}
+
 
 console = Console()
 
@@ -288,6 +293,25 @@ def sanitizeFilename(name):
     return name or "mod"
 
 
+def loadConfig(workDir):
+    configPath = workDir / CONFIG_FILENAME
+    if not configPath.exists():
+        configPath.write_text(json.dumps(DEFAULT_CONFIG, indent=2, ensure_ascii=False),
+                               encoding="utf-8")
+        console.print(f"{SYM['info']} Created {CONFIG_FILENAME} "
+                       f"(fill in \"author\" to have it added to the manifest automatically)")
+        return dict(DEFAULT_CONFIG)
+
+    try:
+        config = json.loads(configPath.read_text(encoding="utf-8"))
+        if not isinstance(config, dict):
+            raise ValueError("config.json must contain a JSON object")
+        return config
+    except Exception as e:
+        console.print(f"  {SYM['err']} Could not read {CONFIG_FILENAME} ({e}), using defaults")
+        return dict(DEFAULT_CONFIG)
+
+
 def unpackVpks(vpkFiles, extractDir):
     console.print(f"{SYM['pkg']} Found VPK file(s) to extract: {len(vpkFiles)}")
 
@@ -375,18 +399,22 @@ def zipVpk(vpkPath, dstZipPath):
     return files
 
 
-def writeManifest(jsonPath, modName):
+def writeManifest(jsonPath, modName, authorName=None):
     manifest = {
         "name": modName,
         "preview": f"{modName}.webp",
         "file": f"{modName}.zip",
         **MANIFEST_TEMPLATE,
     }
+    if authorName:
+        for link in manifest["links"]:
+            if link.get("type") == "author":
+                link["name"] = authorName
     jsonPath.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     console.print(f"  {SYM['ok']} Manifest created: {jsonPath.name}")
 
 
-def packageMod(workDir, vpkPath, imageFile):
+def packageMod(workDir, vpkPath, imageFile, authorName=None):
     console.print(f"\n{SYM['pkg']} Building the final mod package...")
     modName = sanitizeFilename(input("Enter mod name: ").strip())
 
@@ -405,7 +433,7 @@ def packageMod(workDir, vpkPath, imageFile):
         vpkSourceFiles = zipVpk(vpkPath, vpkZipPath)
 
         manifestPath = tmpPath / "mod.json"
-        writeManifest(manifestPath, modName)
+        writeManifest(manifestPath, modName, authorName)
 
         finalArchive = workDir / f"{modName}.zip"
         with zipfile.ZipFile(finalArchive, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -428,10 +456,13 @@ def main():
     workDir = Path.cwd()
     scriptName = Path(sys.argv[0]).name
 
+    config = loadConfig(workDir)
+    authorName = (config.get("author") or "").strip() or None
+
     vpkFiles, otherItems, imageFile = [], [], None
 
     for item in workDir.iterdir():
-        if item.name == scriptName:
+        if item.name in (scriptName, CONFIG_FILENAME):
             continue
         if item.is_file() and item.name.lower().endswith(".vpk"):
             if not isSplitPart(item):
@@ -463,12 +494,12 @@ def main():
                 ok = deletePath(p)
                 console.print(f"  {SYM['ok'] if ok else SYM['err']} {p.name}")
 
-            packageMod(workDir, vpkPath, imageFile)
+            packageMod(workDir, vpkPath, imageFile, authorName)
 
         elif otherItems:
             time.sleep(1)
             vpkPath = compileVpk(otherItems, workDir)
-            packageMod(workDir, vpkPath, imageFile)
+            packageMod(workDir, vpkPath, imageFile, authorName)
 
         else:
             console.print(f"{SYM['info']} No VPK files or mod files found next to the script.")

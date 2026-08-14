@@ -25,6 +25,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path PreMod
           Copy-Item dist\PreMod.exe PreMod\PreMod.exe
+          Copy-Item config.json PreMod\config.json
           Compress-Archive -Path PreMod -DestinationPath PreMod-Win.zip
 
       - uses: actions/upload-artifact@v4
@@ -51,6 +52,7 @@ jobs:
         run: |
           mkdir -p PreMod
           cp dist/PreMod PreMod/PreMod
+          cp config.json PreMod/config.json
           zip -r PreMod-Linux.zip PreMod
 
       - uses: actions/upload-artifact@v4
