@@ -1,0 +1,81 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pyinstaller vpk rich pillow
+
+      - name: Build
+        run: pyinstaller --onefile --console --collect-all vpk --collect-all rich --collect-all pillow --name "PreMod" --icon=icon.ico main.py
+
+      - name: Zip
+        run: |
+          New-Item -ItemType Directory -Path PreMod
+          Copy-Item dist\PreMod.exe PreMod\PreMod.exe
+          Compress-Archive -Path PreMod -DestinationPath PreMod-Win.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: PreMod-Win.zip
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pyinstaller vpk rich pillow
+
+      - name: Build
+        run: pyinstaller --onefile --console --collect-all vpk --collect-all rich --collect-all pillow --name "PreMod" main.py
+
+      - name: Zip
+        run: |
+          mkdir -p PreMod
+          cp dist/PreMod PreMod/PreMod
+          zip -r PreMod-Linux.zip PreMod
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: PreMod-Linux.zip
+
+  release:
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-build
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-build
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            PreMod-Win.zip
+            PreMod-Linux.zip
