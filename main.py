@@ -9,7 +9,7 @@ import shutil
 import zipfile
 import tempfile
 from pathlib import Path
-from hashlib import md5
+from hashlib import md5, sha256
 import vpk
 from rich.console import Console
 from rich.text import Text
@@ -322,12 +322,12 @@ def unpackVpks(vpkFiles, extractDir):
     cleanupUnwantedExtensions(extractDir, UNWANTED_EXTENSIONS)
     cleanupBlacklistedFiles(extractDir)
 
-def calculate_md5(file_path):
-    hash_md5 = md5()
+def calculate_sha256(file_path):
+    hash_sha256 = sha256()
     with open(file_path, "rb") as f:
         for chunk in iter(lambda: f.read(8192), b""):
-            hash_md5.update(chunk)
-    return hash_md5.hexdigest()
+            hash_sha256.update(chunk)
+    return hash_sha256.hexdigest()
 
 def compileVpk(items, workDir):
     items = [i for i in items if not BAD_SUFFIX_RE.search(i.name)]
@@ -370,7 +370,7 @@ def convertToPreviewWebp(srcPath, dstPath, size):
 
 def zipVpk(vpkPath, dstZipPath):
     files = [vpkPath] + findSplitParts(vpkPath)
-    with zipfile.ZipFile(dstZipPath, "w", zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(dstZipPath, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         for f in files:
             zf.write(f, f.name)
     console.print(f"  {SYM['ok']} VPK packed into: {dstZipPath.name}")
@@ -394,7 +394,7 @@ def packageMod(workDir, vpkPath, imageFile, authorName=None):
     console.print(f"\n{SYM['pkg']} Building the final mod package...")
     modName = sanitizeFilename(input("Enter mod name: ").strip())
     
-    vpk_hash = calculate_md5(vpkPath)
+    vpk_hash = calculate_sha256(vpkPath)
     
     with tempfile.TemporaryDirectory() as tmp:
         tmpPath = Path(tmp)
@@ -412,7 +412,7 @@ def packageMod(workDir, vpkPath, imageFile, authorName=None):
         manifestPath = tmpPath / "mod.json"
         writeManifest(manifestPath, modName, authorName)
         
-        vpk_zip_hash = calculate_md5(vpkZipPath)
+        vpk_zip_hash = calculate_sha256(vpkZipPath)
         
         hash_path = tmpPath / "hash.json"
         hash_data = {
