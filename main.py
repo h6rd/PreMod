@@ -8,6 +8,10 @@ import random
 import shutil
 import zipfile
 import tempfile
+import threading
+import subprocess
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from hashlib import md5, sha256
 import vpk
@@ -24,7 +28,7 @@ UNWANTED_EXTENSIONS = {"mov", "png", "txt", "vcss", "vjs", "vmat", "vmdl", "vpcf
 IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "bmp", "tga", "webp"}
 
 BLACKLISTED_FILENAMES = {"items_game.txt"}
-BLACKLISTED_EXTENSIONS = {"ini"}
+BLACKLISTED_EXTENSIONS = {"ini", "bin", "sqlite3", "sqlite3-shm", "sqlite3-wal", "lua", "exe", "zip", "7z"}
 
 PREVIEW_SIZE = (854, 480)
 MANIFEST_TEMPLATE = {
@@ -36,6 +40,12 @@ MANIFEST_TEMPLATE = {
         {"type": "author", "url": " "},
     ],
 }
+APP_VERSION = "v1.3"
+GITHUB_REPO = "h6rd/PreMod"
+UPDATE_CHECK_TIMEOUT = 5
+UPDATE_DOWNLOAD_TIMEOUT = 30
+UPDATE_ASSETS = {"win32": "PreMod-Win.zip", "linux": "PreMod-Linux.zip"}
+UPDATE_BINARIES = {"win32": "PreMod.exe", "linux": "PreMod"}
 CONFIG_FILENAME = "config.json"
 DEFAULT_CONFIG = {
     "author": "",
@@ -69,6 +79,125 @@ def banner():
     for line in lines:
         console.print(Text(line.center(width), style="#B486FF"))
     console.print()
+
+def isFrozen():
+    return bool(getattr(sys, "frozen", False))
+
+def parseVersion(tag):
+    return tuple(int(n) for n in re.findall(r"\d+", tag or ""))
+
+def fetchLatestTag():
+    req = urllib.request.Request(
+        f"https://github.com/{GITHUB_REPO}/releases/latest",
+        method="HEAD",
+        headers={"User-Agent": "PreMod-Updater"},
+    )
+    with urllib.request.urlopen(req, timeout=UPDATE_CHECK_TIMEOUT) as r:
+        finalUrl = r.geturl()
+    marker = "/releases/tag/"
+    if marker not in finalUrl:
+        raise ValueError(f"no releases found (ended up at {finalUrl})")
+    return urllib.parse.unquote(finalUrl.split(marker, 1)[1].split("?", 1)[0].strip("/"))
+
+def checkForUpdate():
+    assetName = UPDATE_ASSETS.get(sys.platform)
+    current = parseVersion(APP_VERSION)
+    if not assetName or not current:
+        return None
+    box = {}
+
+    def worker():
+        try:
+            box["tag"] = fetchLatestTag()
+        except Exception:
+            pass
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    t.join(UPDATE_CHECK_TIMEOUT)
+    tag = box.get("tag")
+    if not tag:
+        return None
+    if parseVersion(tag) <= current:
+        return None
+    url = f"https://github.com/{GITHUB_REPO}/releases/download/{urllib.parse.quote(tag)}/{assetName}"
+    return tag, url, None
+
+def downloadUpdate(url, digest, newPath):
+    req = urllib.request.Request(url, headers={"User-Agent": "PreMod-Updater"})
+    with tempfile.TemporaryDirectory() as tmp:
+        zipPath = Path(tmp) / "update.zip"
+        h = sha256()
+        with urllib.request.urlopen(req, timeout=UPDATE_DOWNLOAD_TIMEOUT) as r, open(zipPath, "wb") as f:
+            while True:
+                chunk = r.read(1 << 16)
+                if not chunk:
+                    break
+                f.write(chunk)
+                h.update(chunk)
+        if digest and digest.lower().startswith("sha256:"):
+            if h.hexdigest() != digest.split(":", 1)[1].lower():
+                raise ValueError("checksum mismatch")
+        binName = UPDATE_BINARIES[sys.platform]
+        with zipfile.ZipFile(zipPath) as z:
+            member = next((i for i in z.infolist() if not i.is_dir() and Path(i.filename).name == binName), None)
+            if member is None:
+                raise ValueError("binary not found in archive")
+            data = z.read(member)
+        magic = b"MZ" if sys.platform == "win32" else b"\x7fELF"
+        if len(data) < 1024 * 1024 or not data.startswith(magic):
+            raise ValueError("downloaded file is not a valid executable")
+        newPath.write_bytes(data)
+
+def applyUpdate(exePath, newPath):
+    if sys.platform == "win32":
+        oldPath = exePath.with_name(exePath.name + ".old")
+        if oldPath.exists():
+            oldPath.unlink()
+        exePath.rename(oldPath)
+        try:
+            newPath.rename(exePath)
+        except Exception:
+            oldPath.rename(exePath)
+            raise
+    else:
+        newPath.chmod(0o755)
+        os.replace(newPath, exePath)
+
+def cleanupOldBinary():
+    if not isFrozen():
+        return
+    exePath = Path(sys.executable)
+    for suffix in (".old", ".new"):
+        try:
+            exePath.with_name(exePath.name + suffix).unlink()
+        except OSError:
+            pass
+
+def selfUpdate():
+    if not isFrozen() or os.environ.get("PREMOD_JUST_UPDATED"):
+        return
+    cleanupOldBinary()
+    info = checkForUpdate()
+    if not info:
+        return
+    tag, url, digest = info
+    exePath = Path(sys.executable)
+    newPath = exePath.with_name(exePath.name + ".new")
+    console.print(f"{SYM['info']} New version {tag} found (current {APP_VERSION}), updating...")
+    try:
+        downloadUpdate(url, digest, newPath)
+        applyUpdate(exePath, newPath)
+    except Exception:
+        try:
+            newPath.unlink()
+        except OSError:
+            pass
+        console.print(f"{SYM['err']} Update failed, continuing with {APP_VERSION}")
+        return
+    console.print(f"{SYM['ok']} Updated to {tag}, restarting...")
+    env = dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1", PREMOD_JUST_UPDATED="1")
+    sys.exit(subprocess.call([str(exePath)] + sys.argv[1:], env=env))
 
 VPK_SIGNATURE = 0x55AA1234
 
@@ -440,15 +569,18 @@ def packageMod(workDir, vpkPath, imageFile, authorName=None):
     console.print(f"\n{SYM['save']} Done: {finalArchive.name}")
 
 def main():
+    selfUpdate()
     banner()
     workDir = Path.cwd()
-    scriptName = Path(sys.argv[0]).name
+    scriptName = Path(sys.executable if isFrozen() else sys.argv[0]).name
     config = loadConfig(workDir)
     authorName = (config.get("author") or "").strip() or None
     
     vpkFiles, otherItems, imageFile = [], [], None
     for item in workDir.iterdir():
-        if item.name in (scriptName, CONFIG_FILENAME):
+        if item.name in (scriptName, CONFIG_FILENAME) or item.name.startswith(scriptName + "."):
+            continue
+        if item.is_file() and item.suffix.lower() == ".zip":
             continue
         if item.is_file() and item.name.lower().endswith(".vpk"):
             if not isSplitPart(item):

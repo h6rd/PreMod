@@ -18,6 +18,15 @@ jobs:
       - name: Install dependencies
         run: pip install pyinstaller vpk rich pillow
 
+      - name: Stamp version from tag
+        shell: python
+        run: |
+          import os, re, pathlib
+          p = pathlib.Path("main.py")
+          s = p.read_text(encoding="utf-8")
+          s = re.sub(r'^APP_VERSION = ".*?"', 'APP_VERSION = "' + os.environ["GITHUB_REF_NAME"] + '"', s, count=1, flags=re.M)
+          p.write_text(s, encoding="utf-8")
+
       - name: Build
         run: pyinstaller --onefile --console --collect-all vpk --collect-all rich --collect-all pillow --name "PreMod" --icon=icon.ico main.py
 
@@ -44,6 +53,15 @@ jobs:
 
       - name: Install dependencies
         run: pip install pyinstaller vpk rich pillow
+
+      - name: Stamp version from tag
+        shell: python
+        run: |
+          import os, re, pathlib
+          p = pathlib.Path("main.py")
+          s = p.read_text(encoding="utf-8")
+          s = re.sub(r'^APP_VERSION = ".*?"', 'APP_VERSION = "' + os.environ["GITHUB_REF_NAME"] + '"', s, count=1, flags=re.M)
+          p.write_text(s, encoding="utf-8")
 
       - name: Build
         run: pyinstaller --onefile --console --collect-all vpk --collect-all rich --collect-all pillow --name "PreMod" main.py
